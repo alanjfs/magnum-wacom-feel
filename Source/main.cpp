@@ -18,19 +18,24 @@ Example usage of Sequentity.inl
 #include <Magnum/GL/Renderer.h>
 #include <Magnum/Platform/GlfwApplication.h>
 
-#include <imgui_internal.h>
+#include <entt/entity/registry.hpp>
 
 using namespace Magnum;
 using namespace Math::Literals;
 
 #include "Theme.inl"
+#include "Wacom.h"
+
+entt::registry Registry;
 
 
-class Application : public Platform::Application {
+class Application : public Platform::Application, Wacom::Tablet {
 public:
     explicit Application(const Arguments& arguments);
     void drawEvent() override;
     void drawCentralWidget();
+
+    void TouchDownEvent(Wacom::TouchEvent event) override;
 
 private:
     auto dpiScaling() const -> Vector2;
@@ -48,6 +53,20 @@ private:
     ImGuiIntegration::Context _imgui{ NoCreate };
     Vector2                   _dpiScaling { 1.0f, 1.0f };
 };
+
+
+void Application::TouchDownEvent(Wacom::TouchEvent event) {
+    Debug() << "id:" << event.id
+            << "\ntime:" << event.time
+            << "\nx:" << event.x
+            << "\ny:" << event.y
+            << "\nheight:" << event.height
+            << "\nwidth:" << event.width
+            << "\nangle:" << event.angle
+            << "\nsensitivity:" << event.sensitivity
+            << "\nconfidence:" << event.confidence
+            << "\nnumTouches:" << event.numTouches;
+}
 
 
 Application::Application(const Arguments& arguments): Platform::Application{arguments,
@@ -101,6 +120,13 @@ Application::Application(const Arguments& arguments): Platform::Application{argu
     GL::Renderer::disable(GL::Renderer::Feature::DepthTest);
 
     this->setSwapInterval(1);  // VSync
+
+    if (!init()) {
+        Debug() << "Couldn't initialise Wacom tabled";
+        abort();
+    }
+
+    listAttachedDevices();
 }
 
 

@@ -15,6 +15,8 @@ include_directories(
     ${CMAKE_SOURCE_DIR}/External/magnum/x64-windows-vsclang-static/${CONFIGURATION}/include
     ${CMAKE_SOURCE_DIR}/External/magnum/x64-windows-vsclang-static/${CONFIGURATION}/include/MagnumExternal/OpenGL
     ${CMAKE_SOURCE_DIR}/External/imgui/x64-windows/include
+    ${CMAKE_SOURCE_DIR}/External/wacom/Wacom_Feel_SDK/inc
+    ${CMAKE_SOURCE_DIR}/External/entt
 )
 
 
@@ -24,8 +26,11 @@ link_directories(
 
 
 set(SRC_FILES
+    ${CMAKE_SOURCE_DIR}/External/wacom/Wacom_Feel_SDK/src/cpp/WacomMultiTouch.cpp
+    Source/Wacom.cpp
     Source/main.cpp
 )
+
 
 set(HEADERS_FILES
 )
