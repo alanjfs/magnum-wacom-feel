@@ -76,7 +76,6 @@ inline void Theme() {
     // Default is 6, which leaves a lag between dragging and actually having an effect.
     ImGui::GetIO().MouseDragThreshold = 0.0f;
 
-    style.AntiAliasedLines = true;
     style.WindowMenuButtonPosition = ImGuiDir_Right;
 
     style.PopupRounding = 3;

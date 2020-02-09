@@ -1,9 +1,3 @@
-/**
-
-Example usage of Sequentity.inl
-
-*/
-
 // (Optional) Magnum prefers to have its imgui.h included first
 #include <Magnum/ImGuiIntegration/Context.hpp>
 
@@ -19,6 +13,7 @@ Example usage of Sequentity.inl
 #include <Magnum/Platform/GlfwApplication.h>
 
 #include <entt/entity/registry.hpp>
+#include <imgui_internal.h> // DockBuilderDockWindow
 
 using namespace Magnum;
 using namespace Math::Literals;
@@ -29,13 +24,11 @@ using namespace Math::Literals;
 entt::registry Registry;
 
 
-class Application : public Platform::Application, Wacom::Tablet {
+class Application : public Platform::Application {
 public:
     explicit Application(const Arguments& arguments);
     void drawEvent() override;
     void drawCentralWidget();
-
-    void TouchDownEvent(Wacom::TouchEvent event) override;
 
 private:
     auto dpiScaling() const -> Vector2;
@@ -52,21 +45,8 @@ private:
 
     ImGuiIntegration::Context _imgui{ NoCreate };
     Vector2                   _dpiScaling { 1.0f, 1.0f };
+    Wacom::Touch              _wacomTouch;
 };
-
-
-void Application::TouchDownEvent(Wacom::TouchEvent event) {
-    Debug() << "id:" << event.id
-            << "\ntime:" << event.time
-            << "\nx:" << event.x
-            << "\ny:" << event.y
-            << "\nheight:" << event.height
-            << "\nwidth:" << event.width
-            << "\nangle:" << event.angle
-            << "\nsensitivity:" << event.sensitivity
-            << "\nconfidence:" << event.confidence
-            << "\nnumTouches:" << event.numTouches;
-}
 
 
 Application::Application(const Arguments& arguments): Platform::Application{arguments,
@@ -121,12 +101,14 @@ Application::Application(const Arguments& arguments): Platform::Application{argu
 
     this->setSwapInterval(1);  // VSync
 
-    if (!init()) {
-        Debug() << "Couldn't initialise Wacom tabled";
+    if (_wacomTouch.init()) {
+        Debug() << "Successfully initialised the Wacom SDK.\n";
+    } else {
+        Debug() << "Couldn't initialise the Wacom SDK";
         abort();
     }
 
-    listAttachedDevices();
+    _wacomTouch.printAttachedDevices();
 }
 
 
@@ -158,6 +140,17 @@ void Application::drawCentralWidget() {
 
     ImGuiID dockSpaceId = ImGui::GetID("InvisibleWindowDockSpace");
 
+    if(!ImGui::DockBuilderGetNode(dockSpaceId)) {
+        ImGui::DockBuilderAddNode(dockSpaceId, ImGuiDockNodeFlags_DockSpace);
+        ImGui::DockBuilderSetNodeSize(dockSpaceId, viewport->Size);
+
+        ImGuiID center = dockSpaceId;
+        ImGuiID left = ImGui::DockBuilderSplitNode(center, ImGuiDir_Left, 0.25f, nullptr, &center);
+
+        ImGui::DockBuilderDockWindow("Canvas", left);
+        ImGui::DockBuilderFinish(center);
+    }
+
     ImGui::DockSpace(dockSpaceId, ImVec2(0.0f, 0.0f));
     ImGui::End();
 }
@@ -171,8 +164,75 @@ void Application::drawEvent() {
     else if (!ImGui::GetIO().WantTextInput &&  isTextInputActive()) stopTextInput();
 
     drawCentralWidget();
+
+    using FingerEvents = std::unordered_map<Wacom::FingerId, std::vector<Wacom::TouchEvent>>;
+    using FingerOpacities = std::unordered_map<Wacom::FingerId, float>;
+
+    static FingerEvents events;
+    static FingerOpacities opacities;
+
+    auto GetColor = [](int id, float opacity = 1.0f) -> ImColor {
+        auto col = ImColor::HSV(float(id) / 10.0f, 0.5f, 1.0f);
+        col.Value.w = opacity;
+        return col;
+    };
+
+    static float speed { 0.1f };
+    static bool mode { false };
+
+    ImGui::Begin("Canvas", nullptr);
+    {
+        ImGui::VSliderFloat("Fade Velocity", ImVec2{ 40.0f, 400.0f }, &speed, 0.0f, 1.0f, "", 3.0f);
+        ImGui::Checkbox("Draw Mode", &mode);
+
+        for (const auto [id, finger] : _wacomTouch.poll()) {
+            if (!finger.confidence) continue;
+
+            if (finger.state == Wacom::TouchState::Down) {
+                if (events.count(finger.fingerId)) events.erase(finger.fingerId);
+            }
+
+            events[finger.fingerId].push_back(finger);
+            opacities[finger.fingerId] = 1.0f;
+        }
+
+        auto& painter = *ImGui::GetWindowDrawList();
+        const auto size = ImGui::GetWindowSize();
+        for (auto [id, events] : events) {
+            painter.PathClear();
+            const auto col = GetColor(id, opacities.at(id));
+            for (auto finger : events) {
+                painter.PathLineTo(ImVec2{ finger.x * size.x, finger.y * size.y });
+            }
+            painter.PathStroke(col, false);
+
+            auto finger = events.back();
+            const auto radius = (finger.width + finger.height) * 50.0f;
+            const auto pos = ImVec2{ finger.x * size.x, finger.y * size.y };
+            painter.AddCircle(pos, radius, col);
+            painter.AddText({ pos.x + 10.0f, pos.y - 10.0f }, col, std::to_string(finger.fingerId).c_str());
+            painter.AddText({ pos.x + 10.0f, pos.y + 10.0f }, col, std::to_string(finger.sensitivity).c_str());
+        }
+
+        std::vector<int> erase;
+        for (auto& [id, opacity] : opacities) {
+            opacity -= opacity * speed;
+
+            if (opacity < 0.0f) {
+                erase.push_back(id);
+            }
+        }
+
+        for (auto id : erase) {
+            opacities.erase(id);
+            events.erase(id);
+        }
+    }
+    ImGui::End();
+
     _imgui.drawFrame();
     swapBuffers();
+    redraw();
 }
 
 
@@ -185,6 +245,7 @@ void Application::viewportEvent(ViewportEvent& event) {
 
 
 void Application::keyPressEvent(KeyEvent& event) {
+    if (event.key() == KeyEvent::Key::Esc)          this->exit();
     if(_imgui.handleKeyPressEvent(event)) return;
 }
 

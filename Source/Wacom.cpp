@@ -6,32 +6,30 @@ namespace Wacom {
 
 
 static void OnAttached(WacomMTCapability deviceInfo, void *userInfo) {
-    Tablet* wacomFeelObj = (Tablet*)userInfo;
-    wacomFeelObj->_deviceAttached(deviceInfo);
+    Touch* tablet = static_cast<Touch*>(userInfo);
+    tablet->_deviceAttached(deviceInfo);
 }
 
 
 static void OnDetached(int deviceID, void *userInfo) {
-    Tablet* wacomFeelObj = (Tablet*)userInfo;
-    wacomFeelObj->_deviceDetached(deviceID);
+    Touch* tablet = static_cast<Touch*>(userInfo);
+    tablet->_deviceDetached(deviceID);
 }
 
 
 static int OnFinger(WacomMTFingerCollection *fingerPacket, void *userInfo) {
-    Tablet* wacomFeelObj = (Tablet*)userInfo;
-    wacomFeelObj->_fingerCallBack(fingerPacket);
+    Touch* tablet = static_cast<Touch*>(userInfo);
+    tablet->_fingerCallBack(fingerPacket);
     return 0;
 }
 
 
-bool Tablet::init() {
+bool Touch::init() {
     bool wasInitialised = false;
 
     WacomMTError err = WacomMTInitialize(WACOM_MULTI_TOUCH_API_VERSION);
 
     if (err == WMTErrorSuccess) {
-        std::cout << "Successfully initialised the Wacom SDK.\n";
-
         /**
          * @brief Listen for device connect/disconnect.
          *
@@ -72,64 +70,62 @@ bool Tablet::init() {
 }
 
 
-void Tablet::_deviceAttached(WacomMTCapability deviceInfo) {
-    std::cout << "Tablet::_deviceAttached";
+void Touch::_deviceAttached(WacomMTCapability deviceInfo) {
 }
 
 
-void Tablet::_deviceDetached(int deviceID) {
-    std::cout << "Tablet::_deviceDetached";    
+void Touch::_deviceDetached(int deviceID) {
 }
 
 
-void Tablet::_fingerCallBack(WacomMTFingerCollection *fingerPacket) {
-    // std::cout << "fingerPacket->FingerCount: " << fingerPacket->FingerCount << std::endl;
-
+void Touch::_fingerCallBack(WacomMTFingerCollection *fingerPacket) {
     for(int fingerIndex = 0; fingerIndex < fingerPacket->FingerCount; fingerIndex++)
     {
         WacomMTFinger* finger = &fingerPacket->Fingers[fingerIndex];
 
-        // From http://www.wacomeng.com/touch/WacomFeelMulti-TouchAPI.htm
-        // Confidence: If true the driver believes this is a valid touch from a finger.  
-        // If false the driver thinks this may be an accidental touch, forearm or palm.
-
         TouchEvent event{};
-        event.id           = finger->FingerID;
+        event.fingerId     = finger->FingerID;
         event.x            = finger->X;
         event.y            = finger->Y;            
-        event.numTouches   = fingerPacket->FingerCount;
         event.width        = finger->Width;
         event.height       = finger->Height;
-        event.angle        = finger->Orientation;
+        event.orientation  = finger->Orientation;
         event.confidence   = finger->Confidence;
+        event.fingerCount  = fingerPacket->FingerCount;
 
         if (finger->TouchState == WMTFingerStateNone) {}
 
         else if (finger->TouchState == WMTFingerStateDown) {
-            TouchDownEvent(event);
+            event.state = TouchState::Down;
+            this->_touchDownEvent(event);
         }
 
         else if (finger->TouchState == WMTFingerStateHold) {
-            TouchHoldEvent(event);
+            event.state = TouchState::Hold;
+            this->_touchHoldEvent(event);
         }
 
         else if (finger->TouchState == WMTFingerStateUp) {
-            TouchUpEvent(event);
+            event.state = TouchState::Up;
+            this->_touchUpEvent(event);
+        }
+
+        else {
+            std::cerr << "Warning: Unrecognised touch state: " << finger->TouchState << std::endl;
         }
     }
 }
 
 
-void Tablet::listAttachedDevices() {
-    int   deviceIDs[MAX_ATTACHED_DEVICES]  = {};
-    int   deviceCount    = 0;
+void Touch::printAttachedDevices() const {
+    int deviceIDs[MAX_ATTACHED_DEVICES] = {};
+    int deviceCount = 0;
 
     // Ask the Wacom API for all connected touch API-capable devices.
     // Pass a comfortably large buffer so you don't have to call this method twice.
     deviceCount = WacomMTGetAttachedDeviceIDs(deviceIDs, sizeof(deviceIDs));
 
     if (deviceCount > MAX_ATTACHED_DEVICES) {
-        // With a number as big as MAX_ATTACHED_DEVICES, this will never actually happen.
         std::cerr << "More tablets connected than would fit in the "
                   << "supplied buffer. Will need to reallocate buffer!";
     }
@@ -140,22 +136,73 @@ void Tablet::listAttachedDevices() {
             WacomMTCapability capabilities = {};
             WacomMTGetDeviceCapabilities(deviceID, &capabilities);
 
-            std::cout << "Device ID: " << deviceID << "  ";
-            if (capabilities.Type == WMTDeviceTypeIntegrated) { 
-                std::cout << "Type: Integrated\n";
-            } 
-            else if (capabilities.Type == WMTDeviceTypeOpaque) { 
-                std::cout << "Type: Opaque\n";
-            } 
-            else { 
-                std::cout << "Type: Unknown\n";
-            }
+            const auto type = capabilities.Type == WMTDeviceTypeIntegrated ? "Integrated"
+                            : capabilities.Type == WMTDeviceTypeOpaque ? "Opaque"
+                            : "Unknown";
 
-            std::cout << "Max Fingers: " << capabilities.FingerMax
-                      << "Scan size: " << capabilities.ReportedSizeX << ", " << capabilities.ReportedSizeY
-                      << std::endl;
+            std::cout << "Version: "        << capabilities.Version         << std::endl
+                      << "DeviceID: "       << capabilities.DeviceID        << std::endl
+                      << "Type: "           << type                         << std::endl
+                      << "LogicalOriginX: " << capabilities.LogicalOriginX  << std::endl
+                      << "LogicalOriginY: " << capabilities.LogicalOriginY  << std::endl
+                      << "LogicalWidth: "   << capabilities.LogicalWidth    << std::endl
+                      << "LogicalHeight: "  << capabilities.LogicalHeight   << std::endl
+                      << "PhysicalSizeX: "  << capabilities.PhysicalSizeX   << std::endl
+                      << "PhysicalSizeY: "  << capabilities.PhysicalSizeY   << std::endl
+                      << "ReportedSizeX: "  << capabilities.ReportedSizeX   << std::endl
+                      << "ReportedSizeY: "  << capabilities.ReportedSizeY   << std::endl;
         }
     }
 }
+
+
+void Touch::_touchDownEvent(TouchEvent event) {
+    _events[event.fingerId] = event;
+    this->touchDownEvent(event);
+}
+
+
+void Touch::_touchHoldEvent(TouchEvent event) {
+    auto& finger = _events.at(event.fingerId);
+
+    if (finger.state == TouchState::Hold) {
+        finger.x = event.x;
+        finger.y = event.y;
+        finger.width = event.width;
+        finger.height = event.height;
+    }
+
+    this->touchHoldEvent(event);
+}
+
+
+void Touch::_touchUpEvent(TouchEvent event) {
+    // Can happen on low-confidence events
+    if (!_events.count(event.fingerId)) return;
+
+    auto& finger = _events.at(event.fingerId);
+    finger.state = TouchState::Up;
+    this->touchUpEvent(event);
+}
+
+
+auto Touch::poll() -> const PollEvents {
+    PollEvents events = _events;
+
+    for (auto [fingerId, event] : events) {
+        if (event.state == TouchState::Up) {
+            _events.erase(fingerId);
+        }
+
+        // Stick keys
+        // Don't actually permit Hold events until Down has been polled
+        if (event.state == TouchState::Down) {
+            _events.at(fingerId).state = TouchState::Hold;
+        }
+    }
+
+    return events;
+}
+
 
 }
