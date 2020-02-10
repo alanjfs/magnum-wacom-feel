@@ -7,10 +7,11 @@
 #include <Magnum/Math/Color.h>
 #include <Magnum/Math/Vector.h>
 #include <Magnum/Magnum.h>
-
 #include <Magnum/GL/DefaultFramebuffer.h>
 #include <Magnum/GL/Renderer.h>
+#include <Magnum/GL/Version.h>
 #include <Magnum/Platform/GlfwApplication.h>
+#include <Corrade/Utility/Resource.h>
 
 #include <entt/entity/registry.hpp>
 #include <imgui_internal.h> // DockBuilderDockWindow
@@ -46,14 +47,34 @@ private:
     ImGuiIntegration::Context _imgui{ NoCreate };
     Vector2                   _dpiScaling { 1.0f, 1.0f };
     Wacom::Touch              _wacomTouch;
+
+    enum Mode {
+        Draw = 0, Monitor
+    };
+
+    int mode { Monitor };
+
+    struct Line {
+        std::vector<ImVec2> positions;
+        float radius { 1.0f };
+        ImColor color;
+        bool fill { false };
+    };
+
+    std::vector<Line> lines;
+    bool fill { false };
 };
 
 
-Application::Application(const Arguments& arguments): Platform::Application{arguments,
-    Configuration{}.setTitle("Wacom Example Application")
-                   .setSize({1600, 900})
-                   .setWindowFlags(Configuration::WindowFlag::Resizable)}
-{
+Application::Application(const Arguments& arguments) : Platform::Application{
+    arguments,
+    Configuration{}.setTitle("Wacom Test")
+                       .setSize({1600, 900})
+                       .setWindowFlags(Configuration::WindowFlag::Resizable),
+    GLConfiguration{}
+        .setVersion(GL::Version::GL420)
+        .setSampleCount(2)
+} {
     // Use virtual scale, rather than the default physical
     glfwGetWindowContentScale(this->window(), &_dpiScaling.x(), &_dpiScaling.y());
 
@@ -69,8 +90,16 @@ Application::Application(const Arguments& arguments): Platform::Application{argu
         windowSize(), framebufferSize()
     );
 
-    ImGui::GetIO().Fonts->Clear();
-    ImGui::GetIO().Fonts->AddFontFromFileTTF("OpenSans-Regular.ttf", 16.0f * dpiScaling().x());
+    auto& io = ImGui::GetIO();
+    io.Fonts->Clear();
+
+    ImFontConfig fontConfig;
+    fontConfig.FontDataOwnedByAtlas = false;
+
+    Utility::Resource rs{"data"};
+    Containers::ArrayView<const char> font = rs.getRaw("OpenSans.ttf");
+    io.Fonts->AddFontFromMemoryTTF(const_cast<char*>(font.data()), font.size(), 16.0f * dpiScaling().x(), &fontConfig);
+    io.Fonts->AddFontFromMemoryTTF(const_cast<char*>(font.data()), font.size(), 24.0f * dpiScaling().x(), &fontConfig);
 
     // Refresh fonts
     _imgui.relayout(
@@ -78,13 +107,10 @@ Application::Application(const Arguments& arguments): Platform::Application{argu
         windowSize(), framebufferSize()
     );
 
-    // Required, else you can't interact with events in the editor
-    ImGui::GetIO().ConfigWindowsMoveFromTitleBarOnly = true;
-
-    // Optional
-    ImGui::GetIO().ConfigWindowsResizeFromEdges = true;
-    ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_DockingEnable;    // Enable Docking
-    ImGui::GetIO().ConfigDockingWithShift = true;
+    io.ConfigWindowsMoveFromTitleBarOnly = true;
+    io.ConfigWindowsResizeFromEdges = true;
+    io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;    // Enable Docking
+    io.ConfigDockingWithShift = true;
 
     Theme();
 
@@ -165,25 +191,26 @@ void Application::drawEvent() {
 
     drawCentralWidget();
 
-    using FingerEvents = std::unordered_map<Wacom::FingerId, std::vector<Wacom::TouchEvent>>;
-    using FingerOpacities = std::unordered_map<Wacom::FingerId, float>;
-
-    static FingerEvents events;
-    static FingerOpacities opacities;
-
     auto GetColor = [](int id, float opacity = 1.0f) -> ImColor {
         auto col = ImColor::HSV(float(id) / 10.0f, 0.5f, 1.0f);
         col.Value.w = opacity;
         return col;
     };
 
-    static float speed { 0.1f };
-    static bool mode { false };
+    auto MonitorMode = [&]() {
+        const auto size = ImGui::GetWindowSize();
+        static float speed { 0.1f };
+        ImGui::BeginChild("Options", ImVec2{ 300.0f, 400.0f }, false);
+        {
+            ImGui::SliderFloat("Fade Velocity", &speed, 0.0f, 1.0f, "", 3.0f);
+        }
+        ImGui::EndChild();
 
-    ImGui::Begin("Canvas", nullptr);
-    {
-        ImGui::VSliderFloat("Fade Velocity", ImVec2{ 40.0f, 400.0f }, &speed, 0.0f, 1.0f, "", 3.0f);
-        ImGui::Checkbox("Draw Mode", &mode);
+        using FingerEvents = std::unordered_map<Wacom::FingerId, std::vector<Wacom::TouchEvent>>;
+        using FingerOpacities = std::unordered_map<Wacom::FingerId, float>;
+
+        static FingerEvents events;
+        static FingerOpacities opacities;
 
         for (const auto [id, finger] : _wacomTouch.poll()) {
             if (!finger.confidence) continue;
@@ -196,8 +223,7 @@ void Application::drawEvent() {
             opacities[finger.fingerId] = 1.0f;
         }
 
-        auto& painter = *ImGui::GetWindowDrawList();
-        const auto size = ImGui::GetWindowSize();
+        auto& painter = *ImGui::GetForegroundDrawList();
         for (auto [id, events] : events) {
             painter.PathClear();
             const auto col = GetColor(id, opacities.at(id));
@@ -211,7 +237,6 @@ void Application::drawEvent() {
             const auto pos = ImVec2{ finger.x * size.x, finger.y * size.y };
             painter.AddCircle(pos, radius, col);
             painter.AddText({ pos.x + 10.0f, pos.y - 10.0f }, col, std::to_string(finger.fingerId).c_str());
-            painter.AddText({ pos.x + 10.0f, pos.y + 10.0f }, col, std::to_string(finger.sensitivity).c_str());
         }
 
         std::vector<int> erase;
@@ -227,6 +252,76 @@ void Application::drawEvent() {
             opacities.erase(id);
             events.erase(id);
         }
+    };
+
+    auto DrawMode = [&]() {
+        const auto size = ImGui::GetWindowSize();
+        ImGui::BeginChild("Options", ImVec2{ 300.0f, 400.0f }, false);
+        {
+            ImGui::Checkbox("Fill", &fill);
+        }
+        ImGui::EndChild();
+
+        auto fingers = _wacomTouch.poll();
+        static bool drawingInProgress { false };
+        std::string status { "" };
+        auto& painter = *ImGui::GetForegroundDrawList();
+
+        if (fingers.count(0)) {
+            auto finger = fingers.at(0);
+            const auto radius = (finger.width + finger.height) * 50.0f;
+            const auto col = GetColor(finger.fingerId);
+            const auto pos = ImVec2{ finger.x * size.x, finger.y * size.y };
+            painter.AddCircle(pos, radius, col);
+
+            status = "Cursor";
+
+            if (fingers.count(1)) {
+                status = "Draw";
+
+                if (!drawingInProgress) {
+                    auto finger = fingers.at(0);
+                    const auto radius = (finger.width + finger.height) * 10.0f;
+                    lines.push_back({ {}, radius, GetColor(lines.size()), fill });
+                }
+
+                drawingInProgress = true;
+            } else {
+                drawingInProgress = false;
+            }
+
+            if (fingers.count(2)) {
+                status = "Size";
+                drawingInProgress = false;
+            }
+        }
+
+        if (drawingInProgress) {
+            auto finger = fingers.at(0);
+            const auto pos = ImVec2{ finger.x * size.x, finger.y * size.y };
+            auto& line = lines.back();
+            line.positions.push_back(pos);
+        }
+
+        ImFont* font = ImGui::GetIO().Fonts->Fonts[1];
+        // auto* font = ImGui::GetFont();
+        const ImVec2 center = { ImGui::GetWindowWidth() * 0.5f, ImGui::GetWindowHeight() * 0.5f };
+        painter.AddText(font, 24.0f, center, ImColor::HSV(0.0f, 0.0f, 1.0f), status.c_str());
+
+        for (auto line : lines) {
+            painter.PathClear();
+            for (auto pos : line.positions) painter.PathLineTo(ImVec2{ pos.x, pos.y });
+            if (line.fill) painter.PathFillConvex(line.color);
+            else           painter.PathStroke(line.color, false, line.radius);
+        }
+    };
+
+    ImGui::Begin("Canvas", nullptr);
+    {
+        bool temp = this->mode == Draw;
+        if (ImGui::Checkbox("Draw Mode", &temp)) this->mode = mode == Monitor ? Draw : Monitor;
+        if (this->mode == Monitor) MonitorMode();
+        if (this->mode == Draw) DrawMode();
     }
     ImGui::End();
 
@@ -246,6 +341,11 @@ void Application::viewportEvent(ViewportEvent& event) {
 
 void Application::keyPressEvent(KeyEvent& event) {
     if (event.key() == KeyEvent::Key::Esc)          this->exit();
+    if (event.key() == KeyEvent::Key::F)            this->fill ^= true;
+    if (event.key() == KeyEvent::Key::Space)        {
+        lines.clear();
+        this->mode = mode == Monitor ? Draw : Monitor;
+    }
     if(_imgui.handleKeyPressEvent(event)) return;
 }
 

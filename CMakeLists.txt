@@ -28,6 +28,7 @@ link_directories(
 set(SRC_FILES
     ${CMAKE_SOURCE_DIR}/External/wacom/Wacom_Feel_SDK/src/cpp/WacomMultiTouch.cpp
     Source/Wacom.cpp
+    Source/Resources.cpp
     Source/main.cpp
 )
 
